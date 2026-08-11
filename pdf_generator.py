@@ -69,10 +69,12 @@ def _spec_cell(label: str, value: str) -> list:
 def _property_block(prop: dict) -> list:
     image_path = str(prop.get("image_path") or "")
     try:
-        img = Image(image_path, width=7.5 * cm, height=6 * cm)
+        # Las fotos ya se cachean recortadas a 3:2 (ver data_loader._crop_to_fill),
+        # se respeta esa proporcion aqui para que no se vean estiradas.
+        img = Image(image_path, width=8 * cm, height=8 * cm * 2 / 3)
         img.hAlign = "LEFT"
     except Exception:
-        img = Spacer(7.5 * cm, 6 * cm)
+        img = Spacer(8 * cm, 8 * cm * 2 / 3)
 
     estado = prop.get("estado", "")
     badge_color = ACCENT if estado == "Desarrollo" else PRIMARY

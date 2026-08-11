@@ -335,6 +335,28 @@ def load_properties(source=None) -> pd.DataFrame:
     return df
 
 
+THUMB_SIZE = (900, 600)  # relacion 3:2, igual que el placeholder
+
+
+def _crop_to_fill(img: Image.Image, size: tuple[int, int] = THUMB_SIZE) -> Image.Image:
+    """Recorta al centro y escala para que todas las fotos (retrato, paisaje,
+    capturas irregulares) terminen con el mismo tamano/proporcion, sin
+    deformarlas, y mantener parejas las tarjetas y el PDF."""
+    target_w, target_h = size
+    src_w, src_h = img.size
+    target_ratio = target_w / target_h
+    src_ratio = src_w / src_h
+    if src_ratio > target_ratio:
+        new_w = max(1, round(src_h * target_ratio))
+        left = (src_w - new_w) // 2
+        img = img.crop((left, 0, left + new_w, src_h))
+    else:
+        new_h = max(1, round(src_w / target_ratio))
+        top = (src_h - new_h) // 2
+        img = img.crop((0, top, src_w, top + new_h))
+    return img.resize(size, Image.LANCZOS)
+
+
 def get_placeholder_image() -> Path:
     """Genera (una sola vez) y devuelve la ruta de una imagen placeholder."""
     IMG_DIR.mkdir(parents=True, exist_ok=True)
@@ -379,7 +401,8 @@ def get_property_image(url: Optional[str], timeout: int = 6) -> Path:
         resp = requests.get(url, headers=REQUEST_HEADERS, timeout=timeout)
         resp.raise_for_status()
         img = Image.open(pd.io.common.BytesIO(resp.content))
-        img.convert("RGB").save(cached_path, format="JPEG", quality=85)
+        img = _crop_to_fill(img.convert("RGB"))
+        img.save(cached_path, format="JPEG", quality=85)
         return cached_path
     except Exception:
         return get_placeholder_image()
