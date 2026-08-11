@@ -37,15 +37,19 @@ DEFAULT_SOURCE_CANDIDATES = [
 
 REQUEST_HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; CatalogoInmuebles/1.0)"}
 IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp")
-IMAGE_HOST_HINTS = ("images.unsplash.com", "cloudinary.com", "imgur.com", "googleusercontent.com")
+IMAGE_HOST_HINTS = (
+    "images.unsplash.com", "cloudinary.com", "imgur.com", "googleusercontent.com",
+    "naventcdn.com", "fbcdn.net", "drive.google.com",
+)
 
 CANONICAL_COLUMNS = [
     "id", "nombre", "ciudad", "zona", "direccion", "precio", "precio_original",
     "moneda", "estado", "recamaras", "banos", "estacionamientos",
     "m2_construccion", "m2_terreno", "precio_m2", "mantenimiento",
-    "descripcion", "imagen_url", "enlace_externo", "ubicacion_filtro",
+    "descripcion", "imagen_url", "imagenes_urls", "enlace_externo", "ubicacion_filtro",
     "hoja_origen",
 ]
+MAX_GALLERY_IMAGES = 6
 
 # Orden de prioridad: el primer campo de la lista reclama primero la columna
 # que matchee alguno de sus alias (busqueda por substring en el encabezado
@@ -167,7 +171,18 @@ def _is_probable_image_url(url: str) -> bool:
     return any(host in url.lower() for host in IMAGE_HOST_HINTS)
 
 
+def _cell_url(cell) -> Optional[str]:
+    link = cell.hyperlink.target if cell.hyperlink else None
+    if link:
+        return link
+    value = cell.value
+    if isinstance(value, str) and value.strip().startswith("http"):
+        return value.strip()
+    return None
+
+
 def _extract_rows(ws, header_row: int, col_map: dict[int, str], hoja_origen: str) -> list[dict]:
+    imagen_col_idx = next((idx for idx, f in col_map.items() if f == "imagen_url"), None)
     rows = []
     for r in range(header_row + 1, ws.max_row + 1):
         row_cells = ws[r]
@@ -182,15 +197,15 @@ def _extract_rows(ws, header_row: int, col_map: dict[int, str], hoja_origen: str
             value = cell.value
 
             if field in ("imagen_url", "enlace_externo"):
-                link = cell.hyperlink.target if cell.hyperlink else None
-                url = link or (str(value).strip() if isinstance(value, str) and value.strip().startswith("http") else None)
+                url = _cell_url(cell)
                 if not url:
                     continue
-                # Una columna ya identificada como "imagen" se respeta tal cual
-                # (no todas las URLs de fotos reales terminan en .jpg/.png).
-                # Solo se aplica la heuristica cuando la columna es generica
-                # ("enlace"/"fuente"/etc.) para decidir si en realidad es una foto.
-                if field == "imagen_url" or _is_probable_image_url(url):
+                # Independiente de si la columna se llama "imagen" o "enlace",
+                # solo se trata como foto si la URL realmente parece una imagen
+                # (por extension o por venir de un CDN de fotos conocido). Esto
+                # evita que un "Ver fotos" que en realidad enlaza a un articulo
+                # (no una foto) se cuele como imagen y se pierda el enlace.
+                if _is_probable_image_url(url):
                     record["imagen_url"] = url
                 else:
                     record["enlace_externo"] = url
@@ -201,6 +216,20 @@ def _extract_rows(ws, header_row: int, col_map: dict[int, str], hoja_origen: str
                 continue
 
             record[field] = value
+
+        # Fotos adicionales: columnas sin encabezado propio, contiguas a la
+        # derecha de la columna de imagen principal, con valores tipo URL
+        # (patron comun al pegar varias fotos de un mismo anuncio).
+        imagenes_extra: list[str] = []
+        if imagen_col_idx is not None:
+            idx = imagen_col_idx + 1
+            while idx < len(row_cells) and idx not in col_map:
+                url = _cell_url(row_cells[idx])
+                if not url:
+                    break
+                imagenes_extra.append(url)
+                idx += 1
+        record["_imagenes_extra"] = imagenes_extra
 
         if raw_estado_val is not None:
             record["_estado_raw"] = raw_estado_val
@@ -279,6 +308,21 @@ def load_properties(source=None) -> pd.DataFrame:
 
     if "id" not in df.columns or df["id"].isna().any():
         df["id"] = range(1, len(df) + 1)
+
+    def _build_gallery(row) -> list[str]:
+        urls: list[str] = []
+        cover = row.get("imagen_url")
+        if isinstance(cover, str) and cover.startswith("http"):
+            urls.append(cover)
+        extra = row.get("_imagenes_extra") or []
+        for u in extra:
+            if u not in urls:
+                urls.append(u)
+        return urls[:MAX_GALLERY_IMAGES]
+
+    if "_imagenes_extra" not in df.columns:
+        df["_imagenes_extra"] = [[] for _ in range(len(df))]
+    df["imagenes_urls"] = df.apply(_build_gallery, axis=1)
 
     for field in CANONICAL_COLUMNS:
         if field not in df.columns:

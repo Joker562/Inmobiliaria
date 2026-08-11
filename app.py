@@ -50,8 +50,12 @@ if "selected" not in st.session_state:
 
 
 @st.cache_data(show_spinner="Leyendo Excel...")
-def _load_from_path(path_str: str) -> pd.DataFrame:
+def _load_from_path_cached(path_str: str, mtime: float) -> pd.DataFrame:
     return load_properties(path_str)
+
+
+def _load_from_path(path: Path) -> pd.DataFrame:
+    return _load_from_path_cached(str(path), path.stat().st_mtime)
 
 
 @st.cache_data(show_spinner="Leyendo Excel...")
@@ -62,6 +66,12 @@ def _load_from_bytes(file_bytes: bytes) -> pd.DataFrame:
 @st.cache_data(show_spinner=False)
 def _cached_image_path(url: str | None) -> str:
     return str(get_property_image(url))
+
+
+def _cached_gallery_paths(urls) -> list[str]:
+    if not urls:
+        return [str(get_property_image(None))]
+    return [_cached_image_path(u) for u in urls]
 
 
 def _fmt_m2(value) -> str:
@@ -86,9 +96,9 @@ if fuente == "Subir mi propio Excel":
 if fuente == "Subir mi propio Excel" and uploaded_file is not None:
     df = _load_from_bytes(uploaded_file.getvalue())
 elif fuente == "Datos de ejemplo":
-    df = _load_from_path(str(SAMPLE_PATH))
+    df = _load_from_path(SAMPLE_PATH)
 elif fuente == "Archivo por defecto":
-    df = _load_from_path(str(DEFAULT_PATH))
+    df = _load_from_path(DEFAULT_PATH)
 else:
     df = pd.DataFrame()
 
@@ -198,8 +208,12 @@ for i in range(0, len(rows), COLS_PER_ROW):
         with col:
             with st.container():
                 st.markdown('<div class="property-card">', unsafe_allow_html=True)
-                img_path = _cached_image_path(row.get("imagen_url"))
-                st.image(img_path, width="stretch")
+                gallery = _cached_gallery_paths(row.get("imagenes_urls"))
+                st.image(gallery[0], width="stretch")
+                if len(gallery) > 1:
+                    thumb_cols = st.columns(min(len(gallery) - 1, 5))
+                    for tcol, thumb in zip(thumb_cols, gallery[1:6]):
+                        tcol.image(thumb, width="stretch")
 
                 badge_class = "badge-dev" if row["estado"] == "Desarrollo" else "badge-market"
                 st.markdown(f'<span class="badge {badge_class}">{row["estado"]}</span>', unsafe_allow_html=True)
