@@ -1,0 +1,6 @@
+assets/cache/
+assets/tmp/
+venv/
+__pycache__/
+node_modules/
+.claude/
