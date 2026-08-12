@@ -66,8 +66,12 @@ ALIASES: list[tuple[str, list[str]]] = [
     ("mantenimiento", ["mantenimiento", "hoa", "cuota"]),
     ("_estado_col", ["estado", "categoria", "status"]),
     ("descripcion", ["descripcion", "detalle", "observacion", "nota"]),
+    # Encabezados especificos tipo "URL de Imagen" / "URL Imagen" se reclaman
+    # antes que una columna generica "Imagen" (que muchas veces es solo un
+    # link a "Ver fotos" en el sitio, no la foto en si).
+    ("imagen_url", ["url de imagen", "url imagen", "imagen url", "url de fotos", "url fotos", "foto url"]),
     ("imagen_url", ["imagen", "foto", "photo", "picture"]),
-    ("enlace_externo", ["enlace", "link", "url", "fuente", "listado", "anuncio"]),
+    ("enlace_externo", ["enlace", "link", "fuente", "listado", "anuncio"]),
     ("direccion", ["direccion", "domicilio", "address"]),
     ("zona", ["colonia", "zona", "barrio", "sector", "ubicacion", "desarrollo"]),
     ("ciudad", ["ciudad", "municipio", "city"]),
@@ -306,9 +310,6 @@ def load_properties(source=None) -> pd.DataFrame:
         axis=1,
     )
 
-    if "id" not in df.columns or df["id"].isna().any():
-        df["id"] = range(1, len(df) + 1)
-
     def _build_gallery(row) -> list[str]:
         urls: list[str] = []
         cover = row.get("imagen_url")
@@ -323,6 +324,21 @@ def load_properties(source=None) -> pd.DataFrame:
     if "_imagenes_extra" not in df.columns:
         df["_imagenes_extra"] = [[] for _ in range(len(df))]
     df["imagenes_urls"] = df.apply(_build_gallery, axis=1)
+
+    # Hojas duplicadas o copias de trabajo (p.ej. una "Hoja 1" con las mismas
+    # propiedades que "Viviendas en Desarrollo") pueden repetir el mismo
+    # inmueble. Se identifica por nombre+zona y se conserva solo la version
+    # mas completa (mas fotos, mas datos), para no listar duplicados.
+    completeness_cols = [c for c in ("precio", "m2_construccion", "m2_terreno", "descripcion", "enlace_externo") if c in df.columns]
+    df["_completeness"] = df["imagenes_urls"].map(len) * 10 + df[completeness_cols].notna().sum(axis=1)
+    df["_dedup_key"] = df["nombre"].map(_normalize_text) + "||" + df["zona"].map(_normalize_text)
+    df = (
+        df.sort_values("_completeness", ascending=False)
+        .drop_duplicates(subset="_dedup_key", keep="first")
+        .sort_index()
+        .reset_index(drop=True)
+    )
+    df["id"] = range(1, len(df) + 1)
 
     for field in CANONICAL_COLUMNS:
         if field not in df.columns:
